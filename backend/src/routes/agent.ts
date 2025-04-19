@@ -1,32 +1,40 @@
-import { Router } from 'express';
-import axios from 'axios';
-import { getContext, setContext } from '../contextStore';
-import { AgentRequestSchema, AgentResponseSchema } from '@shared/types';
+// backend/src/routes/agent.ts
 
-const router = Router();
+import express from 'express';
+import axios from 'axios';
+import { AgentRequest, AgentResponse, agentRequestSchema } from '@shared/types';
+import { getContext, saveContext } from '../contextStore';
+
+const router = express.Router();
 
 router.post('/', async (req, res) => {
-  const parsed = AgentRequestSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json(parsed.error);
+  const parseResult = agentRequestSchema.safeParse(req.body);
 
-  const { input, sessionId } = parsed.data;
-  const context = getContext(sessionId);
+  if (!parseResult.success) {
+    return res.status(400).json({ error: parseResult.error.flatten() });
+  }
+
+  const { input, sessionId, context: clientContext } = parseResult.data;
+
+  // Load stored context or use one from frontend
+  const context = clientContext ?? getContext(sessionId);
 
   try {
-    const response = await axios.post('http://localhost:5100/agent', {
-      input,
-      context,
+    const response = await axios.post<AgentResponse>(
+      'http://localhost:5100/agent',
+      { input, context }
+    );
+
+    // Save updated context for the session
+    saveContext(sessionId, response.data.context ?? {});
+
+    return res.json({
+      messages: response.data.messages,
+      context: response.data.context,
     });
-
-    // Save updated context from Python microservice
-    const { output, updatedContext } = response.data;
-    setContext(sessionId, updatedContext);
-
-    const result = AgentResponseSchema.parse({ output, sessionId });
-    res.json(result);
-  } catch (err) {
-    console.error('🔥 Error talking to agent service:', err);
-    res.status(500).send('Agent service error');
+  } catch (err: any) {
+    console.error('🔥 Error talking to agent service:', err.message);
+    return res.status(500).json({ error: 'Failed to talk to agent service' });
   }
 });
 

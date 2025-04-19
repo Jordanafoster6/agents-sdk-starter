@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-from typing import Dict, Any
+from typing import Dict, Any, List, Literal
 
 from agents.run_context import RunContextWrapper
 from agents import Agent, function_tool, Runner
@@ -10,7 +10,7 @@ load_dotenv()
 
 app = FastAPI()
 
-# Example memory tool
+# --- Define memory tools for storing/retrieving context ---
 @function_tool
 def store_color(ctx: RunContextWrapper[dict], color: str) -> str:
     ctx.context["color"] = color
@@ -20,11 +20,7 @@ def store_color(ctx: RunContextWrapper[dict], color: str) -> str:
 def get_color(ctx: RunContextWrapper[dict]) -> str:
     return ctx.context.get("color", "You haven’t told me your favorite color.")
 
-# @function_tool
-# def test_memory(key: str, value: str, context: dict) -> str:
-#     context[key] = value
-#     return f"Saved {key} = {value}"
-
+# --- Configure the agent with tool access ---
 agent = Agent(
     name="MemoryAgent",
     instructions="Use tools to store and recall the user's favorite color.",
@@ -32,17 +28,26 @@ agent = Agent(
     model="gpt-4"
 )
 
+# --- Input model expected from Node backend ---
 class AgentInput(BaseModel):
     input: str
     context: Dict[str, Any]
 
+# --- Output message shape expected by frontend ---
+class AgentMessage(BaseModel):
+    type: Literal["chat"]
+    role: Literal["user", "assistant"]
+    content: str
+
 @app.post("/agent")
 async def run_agent(data: AgentInput):
-    context = data.context or {}  # just a dict, no import needed
-    result = await Runner.run(agent, data.input, context=context)
-    # print(result.__dict__) # inspect all available fields
-    return {
-      "output": result.final_output,
-      "updatedContext": context,  # this will be a dict
-    }
+    context = data.context or {}
 
+    result = await Runner.run(agent, data.input, context=context)
+
+    return {
+        "messages": [
+            AgentMessage(type="chat", role="assistant", content=result.final_output)
+        ],
+        "context": context,
+    }
